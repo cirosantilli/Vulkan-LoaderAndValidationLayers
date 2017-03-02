@@ -8937,6 +8937,13 @@ TEST_F(VkLayerTest, BufferMemoryBarrierNoBuffer) {
     m_errorMonitor->VerifyFound();
 }
 
+// mewmew
+//00303   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT set
+//00304   VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL  VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT set
+//00305   VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL   VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT set
+//00306   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL          VK_IMAGE_USAGE_SAMPLED_BIT   |    VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT set
+//00307   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL              VK_IMAGE_USAGE_TRANSFER_SRC_BIT set
+//00308   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL              VK_IMAGE_USAGE_TRANSFER_DST_BIT set
 TEST_F(VkLayerTest, InvalidBarriers) {
     TEST_DESCRIPTION("A variety of ways to get VK_INVALID_BARRIER ");
 
@@ -11633,6 +11640,7 @@ TEST_F(VkLayerTest, VertexBufferInvalid) {
     vkDestroyPipelineLayout(m_device->device(), pipeline_layout, NULL);
 }
 
+// mewmew
 // INVALID_IMAGE_LAYOUT tests (one other case is hit by MapMemWithoutHostVisibleBit and not here)
 TEST_F(VkLayerTest, InvalidImageLayout) {
     TEST_DESCRIPTION(
@@ -11845,6 +11853,7 @@ TEST_F(VkLayerTest, InvalidImageLayout) {
     image_barrier[0].subresourceRange.layerCount = image_create_info.arrayLayers;
     image_barrier[0].subresourceRange.levelCount = image_create_info.mipLevels;
     image_barrier[0].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+// mewmew_ValidateImageAspectLayout(); not in VUDB
     m_errorMonitor->SetDesiredFailureMsg(VK_DEBUG_REPORT_ERROR_BIT_EXT,
                                          "You cannot transition the layout of aspect 1 from "
                                          "VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL when "
@@ -16331,6 +16340,7 @@ TEST_F(VkLayerTest, ImageBufferCopyTests) {
     }
 }
 
+// mewmew
 TEST_F(VkLayerTest, MiscImageLayerTests) {
     TEST_DESCRIPTION("Image-related tests that don't belong elsewhare");
 
@@ -17802,6 +17812,7 @@ TEST_F(VkPositiveLayerTest, SecondaryCommandBufferClearColorAttachments) {
     vkCmdClearAttachments(secondary_command_buffer, 1, &color_attachment, 1, &clear_rect);
 }
 
+// mewmew
 TEST_F(VkPositiveLayerTest, SecondaryCommandBufferImageLayoutTransitions) {
     TEST_DESCRIPTION(
         "Perform an image layout transition in a secondary command buffer followed "
@@ -18705,6 +18716,7 @@ TEST_F(VkPositiveLayerTest, TestDestroyFreeNullHandles) {
     m_errorMonitor->VerifyNotFound();
 }
 
+// mewmew
 TEST_F(VkPositiveLayerTest, QueueSubmitSemaphoresAndLayoutTracking) {
     TEST_DESCRIPTION("Submit multiple command buffers with chained semaphore signals and layout transitions");
 
