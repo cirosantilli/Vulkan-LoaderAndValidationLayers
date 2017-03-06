@@ -55,7 +55,7 @@ struct layer_data {
     VkDebugReportCallbackCreateInfoEXT *tmp_dbg_create_infos;
     VkDebugReportCallbackEXT *tmp_callbacks;
 
-    std::unordered_map<VkDescriptorUpdateTemplateKHR, std::unique_ptr<TEMPLATE_STATE>> desc_template_map;
+    std::unordered_map<uint64_t, std::unique_ptr<TEMPLATE_STATE>> desc_template_map;
 
     bool wsi_enabled;
     std::unordered_map<uint64_t, uint64_t> unique_id_mapping;  // Map uniqueID to actual object handle

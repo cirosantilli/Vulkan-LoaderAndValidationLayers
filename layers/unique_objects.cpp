@@ -20,6 +20,8 @@
  * Author: Mark Lobodzinski <mark@lunarg.com>
  */
 
+#define NOMINMAX
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +29,7 @@
 #include <vector>
 #include <list>
 #include <memory>
+#include <algorithm>
 
 // For Windows, this #include must come before other Vk headers.
 #include "vk_loader_platform.h"
@@ -635,9 +638,8 @@ VKAPI_ATTR VkResult VKAPI_CALL CreateDescriptorUpdateTemplateKHR(VkDevice device
         *pDescriptorUpdateTemplate = reinterpret_cast<VkDescriptorUpdateTemplateKHR &>(unique_id);
 
         // Shadow template createInfo for later updates
-        std::unique_ptr<TEMPLATE_STATE> template_state(
-            new TEMPLATE_STATE(*pDescriptorUpdateTemplate, local_pCreateInfo));
-        dev_data->desc_template_map[reinterpret_cast<VkDescriptorUpdateTemplateKHR &>(unique_id)] = std::move(template_state);
+        std::unique_ptr<TEMPLATE_STATE> template_state(new TEMPLATE_STATE(*pDescriptorUpdateTemplate, local_pCreateInfo));
+        dev_data->desc_template_map[unique_id] = std::move(template_state);
     }
     return result;
 }
@@ -647,25 +649,93 @@ VKAPI_ATTR void VKAPI_CALL DestroyDescriptorUpdateTemplateKHR(VkDevice device,
                                                               const VkAllocationCallbacks *pAllocator) {
     layer_data *dev_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
     std::unique_lock<std::mutex> lock(global_lock);
-    dev_data->desc_template_map.erase(descriptorUpdateTemplate);
     uint64_t descriptorUpdateTemplate_id = reinterpret_cast<uint64_t &>(descriptorUpdateTemplate);
+    dev_data->desc_template_map.erase(descriptorUpdateTemplate_id);
     descriptorUpdateTemplate = (VkDescriptorUpdateTemplateKHR)dev_data->unique_id_mapping[descriptorUpdateTemplate_id];
     dev_data->unique_id_mapping.erase(descriptorUpdateTemplate_id);
     lock.unlock();
     dev_data->device_dispatch_table->DestroyDescriptorUpdateTemplateKHR(device, descriptorUpdateTemplate, pAllocator);
 }
 
+void *BuildUnwrappedUpdateTemplateBuffer(layer_data *dev_data, uint64_t descriptorUpdateTemplate, const void *pData) {
+    auto const template_map_entry = dev_data->desc_template_map.find(descriptorUpdateTemplate);
+    if (template_map_entry == dev_data->desc_template_map.end()) {
+        assert(0);
+    }
+    auto const &create_info = template_map_entry->second->create_info;
+    char *size = 0;
+    std::vector<std::pair<char *, uint64_t>> patch_list;
+
+    for (uint32_t i = 0; i < create_info->descriptorUpdateEntryCount; i++) {
+        for (uint32_t j = 0; j < create_info->pDescriptorUpdateEntries[i].descriptorCount; j++) {
+            char *offset =
+                (char *)create_info->pDescriptorUpdateEntries[i].offset + j * create_info->pDescriptorUpdateEntries[i].stride;
+            char *entry = (char *)(pData) + (uint64_t)offset;
+
+            if ((create_info->pDescriptorUpdateEntries[i].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER) ||
+                (create_info->pDescriptorUpdateEntries[i].descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) ||
+                (create_info->pDescriptorUpdateEntries[i].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) ||
+                (create_info->pDescriptorUpdateEntries[i].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) ||
+                (create_info->pDescriptorUpdateEntries[i].descriptorType == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT)) {
+                auto image_entry = reinterpret_cast<VkDescriptorImageInfo *>(entry);
+                size = std::max(size, (char *)offset + sizeof(VkDescriptorImageInfo));
+
+                auto sampler_handle = dev_data->unique_id_mapping[reinterpret_cast<uint64_t &>(image_entry->sampler)];
+                patch_list.emplace_back(std::make_pair(offset, sampler_handle));
+                offset += sizeof(VkSampler);
+                auto image_view_handle = dev_data->unique_id_mapping[reinterpret_cast<uint64_t &>(image_entry->imageView)];
+                patch_list.emplace_back(std::make_pair(offset, image_view_handle));
+                offset += sizeof(VkImageView);
+                patch_list.emplace_back(std::make_pair(offset, image_entry->imageLayout));
+
+            } else if ((create_info->pDescriptorUpdateEntries[i].descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) ||
+                       (create_info->pDescriptorUpdateEntries[i].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) ||
+                       (create_info->pDescriptorUpdateEntries[i].descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC) ||
+                       (create_info->pDescriptorUpdateEntries[i].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC)) {
+                auto buffer_entry = reinterpret_cast<VkDescriptorBufferInfo *>(entry);
+                size = std::max(size, (char *)offset + sizeof(VkDescriptorBufferInfo));
+
+                auto buffer_handle = dev_data->unique_id_mapping[reinterpret_cast<uint64_t &>(buffer_entry->buffer)];
+                patch_list.emplace_back(std::make_pair(offset, buffer_handle));
+                offset += sizeof(VkBuffer);
+                patch_list.emplace_back(std::make_pair(offset, buffer_entry->offset));
+                offset += sizeof(VkDeviceSize);
+                patch_list.emplace_back(std::make_pair(offset, buffer_entry->range));
+
+            } else if ((create_info->pDescriptorUpdateEntries[i].descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER) ||
+                       (create_info->pDescriptorUpdateEntries[i].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER)) {
+                size = std::max(size, (char *)offset + sizeof(VkBufferView));
+
+                auto buffer_view_handle = dev_data->unique_id_mapping[reinterpret_cast<uint64_t &>(entry)];
+                patch_list.emplace_back(std::make_pair(offset, buffer_view_handle));
+            }
+        }
+    }
+
+    // Allocate required buffer size and populate with source/unwrapped data
+    void *unwrapped_data = malloc(reinterpret_cast<size_t>(size));
+    for (auto &patch : patch_list) {
+        uint64_t *poke = (uint64_t *)((char *)unwrapped_data + (uint64_t)patch.first);
+        *poke = patch.second;
+    }
+    return (void *)unwrapped_data;
+}
+
 VKAPI_ATTR void VKAPI_CALL UpdateDescriptorSetWithTemplateKHR(VkDevice device, VkDescriptorSet descriptorSet,
                                                               VkDescriptorUpdateTemplateKHR descriptorUpdateTemplate,
                                                               const void *pData) {
     layer_data *dev_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
+    uint64_t handle = reinterpret_cast<uint64_t &>(descriptorUpdateTemplate);
     {
         std::lock_guard<std::mutex> lock(global_lock);
         descriptorSet = (VkDescriptorSet)dev_data->unique_id_mapping[reinterpret_cast<uint64_t &>(descriptorSet)];
-        descriptorUpdateTemplate =
-            (VkDescriptorUpdateTemplateKHR)dev_data->unique_id_mapping[reinterpret_cast<uint64_t &>(descriptorUpdateTemplate)];
+        descriptorUpdateTemplate = (VkDescriptorUpdateTemplateKHR)dev_data->unique_id_mapping[handle];
     }
-    dev_data->device_dispatch_table->UpdateDescriptorSetWithTemplateKHR(device, descriptorSet, descriptorUpdateTemplate, pData);
+    void *unwrapped_buffer = nullptr;
+    unwrapped_buffer = BuildUnwrappedUpdateTemplateBuffer(dev_data, handle, pData);
+    dev_data->device_dispatch_table->UpdateDescriptorSetWithTemplateKHR(device, descriptorSet, descriptorUpdateTemplate,
+                                                                        unwrapped_buffer);
+    free(unwrapped_buffer);
 }
 
 VKAPI_ATTR void VKAPI_CALL CmdPushDescriptorSetWithTemplateKHR(VkCommandBuffer commandBuffer,
